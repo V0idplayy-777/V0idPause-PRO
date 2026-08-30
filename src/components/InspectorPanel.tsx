@@ -95,9 +95,12 @@ export const InspectorPanel: React.FC = () => {
       <div className="inspector-body">
 
         <Section title="Motion" icon={<Layers size={13} />}>
-          <SliderRow label="Opacity" value={(clip.opacity ?? 1) * 100} min={0} max={100} unit="%" onChange={v => u({ opacity: v / 100 })} onReset={() => u({ opacity: 1 })} />
-          <SliderRow label="Speed" value={clip.speed ?? 1} min={0.25} max={4} step={0.05} unit="x" onChange={v => u({ speed: v })} onReset={() => u({ speed: 1 })} />
-        </Section>
+  <SliderRow label="Opacity" value={(clip.opacity ?? 1) * 100} min={0} max={100} unit="%" onChange={v => u({ opacity: v / 100 })} onReset={() => u({ opacity: 1 })} />
+  <SliderRow label="Scale" value={(clip.scale ?? 1) * 100} min={10} max={300} unit="%" onChange={v => u({ scale: v / 100 })} onReset={() => u({ scale: 1 })} />
+  <SliderRow label="Position X" value={clip.x ?? 0} min={-1000} max={1000} unit="px" onChange={v => u({ x: v })} onReset={() => u({ x: 0 })} />
+  <SliderRow label="Position Y" value={clip.y ?? 0} min={-1000} max={1000} unit="px" onChange={v => u({ y: v })} onReset={() => u({ y: 0 })} />
+  <SliderRow label="Speed" value={clip.speed ?? 1} min={0.25} max={4} step={0.05} unit="x" onChange={v => u({ speed: v })} onReset={() => u({ speed: 1 })} />
+</Section>
 
         <Section title="Timing" icon={<Clock size={13} />}>
           <div className="inspector-row">
@@ -157,18 +160,28 @@ export const InspectorPanel: React.FC = () => {
           </Section>
         )}
 
-        <Section title="Transitions" icon={<CornerDownRight size={13} />} defaultOpen={false}>
-          <div className="inspector-row">
-            <label className="inspector-label">Type</label>
-            <select
-              className="inspector-select"
-              value={clip.transition || 'none'}
-              onChange={e => u({ transition: e.target.value as TransitionType })}
-            >
-              {TRANSITIONS.map(t => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
-            </select>
-          </div>
-        </Section>
+<Section title="Transitions" icon={<CornerDownRight size={13} />} defaultOpen={false}>
+  <div className="inspector-row">
+    <label className="inspector-label">Type</label>
+    <select
+      className="inspector-select"
+      value={clip.transition || 'none'}
+      onChange={e => u({ transition: e.target.value as TransitionType })}
+    >
+      {TRANSITIONS.map(t => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
+    </select>
+  </div>
+  <SliderRow
+    label="Duration"
+    value={clip.transitionDuration ?? 0.5}
+    min={0}
+    max={3}
+    step={0.05}
+    unit="s"
+    onChange={v => u({ transitionDuration: v })}
+    onReset={() => u({ transitionDuration: 0.5 })}
+  />
+</Section>
 
         {clip.type === 'text' && (
           <Section title="Text" icon={<Type size={13} />}>
