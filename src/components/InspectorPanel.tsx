@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import {
   Sliders, Volume2,
   ChevronDown, ChevronRight, RefreshCw, Film,
-  Palette, Clock, Layers, CornerDownRight, Type
+  Palette, Clock, Layers, CornerDownRight, Type, Plus, Trash2, Diamond
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { FilterSettings, TransitionType } from '../types';
@@ -64,6 +64,101 @@ const Section: React.FC<SectionProps> = ({ title, icon, children, defaultOpen = 
   );
 };
 
+const KeyframeRow: React.FC<{
+  label: string;
+  prop: 'opacity' | 'volume' | 'scale' | 'x' | 'y';
+  clip: any;
+  currentTime: number;
+  onUpdate: (updates: any) => void;
+  displayValue: number;
+  unit?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+  onSlider: (v: number) => void;
+  onReset: () => void;
+}> = ({ label, prop, clip, currentTime, onUpdate, displayValue, unit = '', min = 0, max = 100, step = 1, onSlider, onReset }) => {
+  const localTime = Math.max(0, currentTime - clip.startTime);
+  const kfs = (clip.keyframes?.[prop] || []) as { time: number; value: number }[];
+  const hasKfHere = kfs.some(k => Math.abs(k.time - localTime) < 0.05);
+
+  const addKeyframe = () => {
+    const existing = clip.keyframes || {};
+    const list = [...(existing[prop] || [])];
+    const idx = list.findIndex(k => Math.abs(k.time - localTime) < 0.05);
+    const value = prop === 'opacity' || prop === 'volume' || prop === 'scale'
+      ? displayValue / (prop === 'scale' ? 100 : 100)
+      : displayValue;
+    const realValue = prop === 'opacity' ? displayValue / 100
+      : prop === 'volume' ? displayValue / 100
+      : prop === 'scale' ? displayValue / 100
+      : displayValue;
+
+    if (idx >= 0) {
+      list[idx] = { time: localTime, value: realValue };
+    } else {
+      list.push({ time: localTime, value: realValue });
+      list.sort((a, b) => a.time - b.time);
+    }
+    onUpdate({ keyframes: { ...existing, [prop]: list } });
+  };
+
+  const removeKeyframe = (time: number) => {
+    const existing = clip.keyframes || {};
+    const list = (existing[prop] || []).filter((k: any) => Math.abs(k.time - time) > 0.01);
+    onUpdate({ keyframes: { ...existing, [prop]: list } });
+  };
+
+  return (
+    <div className="inspector-row" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 4 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <label className="inspector-label" style={{ minWidth: 70 }}>{label}</label>
+        <input
+          type="range"
+          min={min} max={max} step={step}
+          value={displayValue}
+          onChange={e => onSlider(Number(e.target.value))}
+          className="inspector-slider"
+        />
+        <input
+          type="number"
+          value={Math.round(displayValue * 100) / 100}
+          min={min} max={max} step={step}
+          onChange={e => onSlider(Number(e.target.value))}
+          className="inspector-number"
+        />
+        {unit && <span className="inspector-unit">{unit}</span>}
+        <button
+          className={`icon-btn-sm ${hasKfHere ? 'active' : ''}`}
+          onClick={addKeyframe}
+          title={hasKfHere ? 'Update keyframe at playhead' : 'Add keyframe at playhead'}
+        >
+          <Diamond size={10} fill={hasKfHere ? 'currentColor' : 'none'} />
+        </button>
+        <button className="icon-btn-sm" onClick={onReset} title="Reset">
+          <RefreshCw size={9} />
+        </button>
+      </div>
+      {kfs.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, paddingLeft: 76 }}>
+          {kfs.map((k, i) => (
+            <button
+              key={i}
+              className="icon-btn-sm"
+              style={{ fontSize: 10, padding: '1px 5px', opacity: Math.abs(k.time - localTime) < 0.05 ? 1 : 0.6 }}
+              onClick={() => removeKeyframe(k.time)}
+              title={`Keyframe at ${k.time.toFixed(2)}s — click to remove`}
+            >
+              {k.time.toFixed(1)}s
+              <Trash2 size={8} style={{ marginLeft: 3 }} />
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 export const InspectorPanel: React.FC = () => {
   const { selectedClipIds, clips, updateClip } = useStore();
   const clipId = selectedClipIds[0];
@@ -85,6 +180,8 @@ export const InspectorPanel: React.FC = () => {
   const f = clip.filters || { brightness: 100, contrast: 100, saturation: 100, hue: 0, blur: 0, sepia: 0, grayscale: 0 };
   const uf = (patch: Partial<FilterSettings>) => u({ filters: { ...f, ...patch } });
 
+  const currentTime = useStore(s => s.currentTime);
+
   return (
     <div className="panel inspector-panel">
       <div className="panel-header">
@@ -94,11 +191,55 @@ export const InspectorPanel: React.FC = () => {
 
       <div className="inspector-body">
 
-        <Section title="Motion" icon={<Layers size={13} />}>
-  <SliderRow label="Opacity" value={(clip.opacity ?? 1) * 100} min={0} max={100} unit="%" onChange={v => u({ opacity: v / 100 })} onReset={() => u({ opacity: 1 })} />
-  <SliderRow label="Scale" value={(clip.scale ?? 1) * 100} min={10} max={300} unit="%" onChange={v => u({ scale: v / 100 })} onReset={() => u({ scale: 1 })} />
-  <SliderRow label="Position X" value={clip.x ?? 0} min={-1000} max={1000} unit="px" onChange={v => u({ x: v })} onReset={() => u({ x: 0 })} />
-  <SliderRow label="Position Y" value={clip.y ?? 0} min={-1000} max={1000} unit="px" onChange={v => u({ y: v })} onReset={() => u({ y: 0 })} />
+<Section title="Motion" icon={<Layers size={13} />}>
+  <KeyframeRow
+    label="Opacity"
+    prop="opacity"
+    clip={clip}
+    currentTime={currentTime}
+    onUpdate={u}
+    displayValue={(clip.opacity ?? 1) * 100}
+    unit="%"
+    min={0} max={100}
+    onSlider={v => u({ opacity: v / 100 })}
+    onReset={() => u({ opacity: 1, keyframes: { ...(clip.keyframes || {}), opacity: [] } })}
+  />
+  <KeyframeRow
+    label="Scale"
+    prop="scale"
+    clip={clip}
+    currentTime={currentTime}
+    onUpdate={u}
+    displayValue={(clip.scale ?? 1) * 100}
+    unit="%"
+    min={10} max={300}
+    onSlider={v => u({ scale: v / 100 })}
+    onReset={() => u({ scale: 1, keyframes: { ...(clip.keyframes || {}), scale: [] } })}
+  />
+  <KeyframeRow
+    label="Pos X"
+    prop="x"
+    clip={clip}
+    currentTime={currentTime}
+    onUpdate={u}
+    displayValue={clip.x ?? 0}
+    unit="px"
+    min={-1000} max={1000}
+    onSlider={v => u({ x: v })}
+    onReset={() => u({ x: 0, keyframes: { ...(clip.keyframes || {}), x: [] } })}
+  />
+  <KeyframeRow
+    label="Pos Y"
+    prop="y"
+    clip={clip}
+    currentTime={currentTime}
+    onUpdate={u}
+    displayValue={clip.y ?? 0}
+    unit="px"
+    min={-1000} max={1000}
+    onSlider={v => u({ y: v })}
+    onReset={() => u({ y: 0, keyframes: { ...(clip.keyframes || {}), y: [] } })}
+  />
   <SliderRow label="Speed" value={clip.speed ?? 1} min={0.25} max={4} step={0.05} unit="x" onChange={v => u({ speed: v })} onReset={() => u({ speed: 1 })} />
 </Section>
 
@@ -137,7 +278,18 @@ export const InspectorPanel: React.FC = () => {
 
         {(clip.type === 'video' || clip.type === 'audio') && (
           <Section title="Audio" icon={<Volume2 size={13} />}>
-            <SliderRow label="Volume" value={(clip.volume ?? 1) * 100} min={0} max={200} unit="%" onChange={v => u({ volume: v / 100 })} onReset={() => u({ volume: 1 })} />
+            <KeyframeRow
+  label="Volume"
+  prop="volume"
+  clip={clip}
+  currentTime={currentTime}
+  onUpdate={u}
+  displayValue={(clip.volume ?? 1) * 100}
+  unit="%"
+  min={0} max={200}
+  onSlider={v => u({ volume: v / 100 })}
+  onReset={() => u({ volume: 1, keyframes: { ...(clip.keyframes || {}), volume: [] } })}
+/>
             <div className="inspector-row">
               <label className="inspector-label">Mute</label>
               <input type="checkbox" checked={!!clip.muted} onChange={e => u({ muted: e.target.checked })} className="inspector-checkbox" />
