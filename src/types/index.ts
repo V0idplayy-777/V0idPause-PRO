@@ -1,19 +1,32 @@
 export type ClipType = 'video' | 'audio' | 'image' | 'text' | 'effect';
 
+export interface Keyframe {
+  time: number;
+  value: number;
+}
+
+export interface ClipKeyframes {
+  opacity?: Keyframe[];
+  volume?: Keyframe[];
+  x?: Keyframe[];
+  y?: Keyframe[];
+  scale?: Keyframe[];
+}
+
 export interface Clip {
   id: string;
   name: string;
   type: ClipType;
   trackId: string;
-  startTime: number;   // seconds on timeline
-  duration: number;    // seconds
-  src?: string;        // object URL or data URL
+  startTime: number;
+  duration: number;
+  src?: string;
   color?: string;
-  volume?: number;     // 0-1
-  opacity?: number;    // 0-1
-  speed?: number;      // 0.25-4
-  trimStart?: number;  // seconds trimmed from original start
-  trimEnd?: number;    // seconds trimmed from original end
+  volume?: number;
+  opacity?: number;
+  speed?: number;
+  trimStart?: number;
+  trimEnd?: number;
   originalDuration?: number;
   textContent?: string;
   fontSize?: number;
@@ -22,12 +35,17 @@ export interface Clip {
   textBgColor?: string;
   filters?: FilterSettings;
   transition?: TransitionType;
+  transitionDuration?: number;
   muted?: boolean;
   locked?: boolean;
+  x?: number;
+  y?: number;
+  scale?: number;
+  keyframes?: ClipKeyframes;
 }
 
 export interface FilterSettings {
-  brightness: number;  // 0-200 (100 = normal)
+  brightness: number;
   contrast: number;
   saturation: number;
   hue: number;
@@ -70,7 +88,7 @@ export interface ProjectState {
   duration: number;
   currentTime: number;
   playing: boolean;
-  zoom: number;           // pixels per second
+  zoom: number;
   selectedClipIds: string[];
   selectedTool: Tool;
   mediaAssets: MediaAsset[];
