@@ -220,27 +220,18 @@ export const Timeline: React.FC = () => {
   };
 
   const rulerTicks = useMemo(() => {
-    const ticks: { t: number; x: number; major: boolean }[] = [];
-    const interval = zoom >= 200 ? 0.5 : zoom >= 80 ? 1 : zoom >= 30 ? 5 : zoom >= 10 ? 10 : 30;
-    const maxTicks = 400;
-    let count = 0;
-    for (let t = 0; t <= duration + interval && count < maxTicks; t += interval) {
-      const x = timeToX(t);
-      ticks.push({ t, x, major: true });
-      count++;
-      if (interval >= 1 && zoom >= 60) {
-        for (let sub = 1; sub < 5 && count < maxTicks; sub++) {
-          const st = t + sub * (interval / 5);
-          if (st > duration + interval) break;
-          ticks.push({ t: st, x: timeToX(st), major: false });
-          count++;
-        }
-      }
-    }
-    return ticks;
-  }, [zoom, duration]);
+  const ticks: { t: number; x: number; major: boolean }[] = [];
+  const interval = zoom >= 200 ? 1 : zoom >= 80 ? 2 : zoom >= 30 ? 5 : zoom >= 10 ? 10 : 30;
+  const maxTicks = 250;
+  let count = 0;
+  for (let t = 0; t <= duration + interval && count < maxTicks; t += interval) {
+    ticks.push({ t, x: timeToX(t), major: true });
+    count++;
+  }
+  return ticks;
+}, [zoom, duration]);
 
-  const totalTimelineWidth = Math.max(timeToX(duration) + 300, 1200);
+  const totalTimelineWidth = Math.min(Math.max(timeToX(duration) + 300, 1200), 12000);
 
   const renderClip = (clip: Clip) => {
     const left = timeToX(clip.startTime);
