@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState, useMemo, memo } from 'react';
 import {
   Lock, Unlock, Volume2, VolumeX,
   Trash2, Film, Mic
@@ -33,13 +33,38 @@ interface DragState {
   startTrimStart: number;
 }
 
+const Playhead = memo(() => {
+  const currentTime = useStore(s => s.currentTime);
+  const zoom = useStore(s => s.zoom);
+  const tracks = useStore(s => s.tracks);
+  const left = currentTime * zoom;
+  const height = tracks.reduce((s, t) => s + t.height, 0);
+  return (
+    <>
+      <div className="ruler-playhead" style={{ left }} />
+      <div className="timeline-playhead" style={{ left, height }} />
+    </>
+  );
+});
+
 export const Timeline: React.FC = () => {
-  const {
-    tracks, clips, currentTime, setCurrentTime, zoom, duration,
-    selectedClipIds, selectClips, updateClip,
-    selectedTool, addTrack, updateTrack, removeTrack, addClip,
-    mediaAssets, snapEnabled, splitClip, markers
-  } = useStore();
+  const tracks = useStore(s => s.tracks);
+  const clips = useStore(s => s.clips);
+  const setCurrentTime = useStore(s => s.setCurrentTime);
+  const zoom = useStore(s => s.zoom);
+  const duration = useStore(s => s.duration);
+  const selectedClipIds = useStore(s => s.selectedClipIds);
+  const selectClips = useStore(s => s.selectClips);
+  const updateClip = useStore(s => s.updateClip);
+  const selectedTool = useStore(s => s.selectedTool);
+  const addTrack = useStore(s => s.addTrack);
+  const updateTrack = useStore(s => s.updateTrack);
+  const removeTrack = useStore(s => s.removeTrack);
+  const addClip = useStore(s => s.addClip);
+  const mediaAssets = useStore(s => s.mediaAssets);
+  const snapEnabled = useStore(s => s.snapEnabled);
+  const splitClip = useStore(s => s.splitClip);
+  const markers = useStore(s => s.markers);
 
   const rulerRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -66,12 +91,18 @@ export const Timeline: React.FC = () => {
       } else if (e.key === 'v' || e.key === 'V') { useStore.getState().setSelectedTool('select'); }
       else if (e.key === 'c' || e.key === 'C') { useStore.getState().setSelectedTool('razor'); }
       else if (e.key === 'h' || e.key === 'H') { useStore.getState().setSelectedTool('hand'); }
-      else if (e.key === 'ArrowLeft') { setCurrentTime(Math.max(0, currentTime - (e.shiftKey ? 1 : 1 / 30))); }
-      else if (e.key === 'ArrowRight') { setCurrentTime(Math.min(duration, currentTime + (e.shiftKey ? 1 : 1 / 30))); }
+      else if (e.key === 'ArrowLeft') {
+        const t = useStore.getState().currentTime;
+        setCurrentTime(Math.max(0, t - (e.shiftKey ? 1 : 1 / 30)));
+      } else if (e.key === 'ArrowRight') {
+        const t = useStore.getState().currentTime;
+        const d = useStore.getState().duration;
+        setCurrentTime(Math.min(d, t + (e.shiftKey ? 1 : 1 / 30)));
+      }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [currentTime, setCurrentTime, duration]);
+  }, [setCurrentTime]);
 
   const timeToX = (t: number) => t * zoom;
   const xToTime = (x: number) => x / zoom;
@@ -102,98 +133,75 @@ export const Timeline: React.FC = () => {
     const x = e.clientX - rect.left + scrollLeft;
     setCurrentTime(Math.max(0, Math.min(duration, xToTime(x))));
     const onMove = (ev: MouseEvent) => {
-      const x2 = ev.clientX - (rulerRef.current?.getBoundingClientRect().left || 0) + scrollLeft;
+      const x2 = ev.clientX - rect.left + scrollLeft;
       setCurrentTime(Math.max(0, Math.min(duration, xToTime(x2))));
     };
-    const onUp = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
   };
 
-  const handleClipMouseDown = (e: React.MouseEvent, clip: Clip, action: DragState['type']) => {
-    if (selectedTool === 'razor') {
-      e.stopPropagation();
-      const trackEl = (e.currentTarget as HTMLElement).closest('.timeline-track-body');
-      const rect = trackEl?.getBoundingClientRect();
-      if (!rect) return;
-      const x = e.clientX - rect.left + scrollLeft;
-      const t = snapTime(xToTime(x));
-      splitClip(clip.id, t);
-      return;
-    }
+  const handleClipMouseDown = (e: React.MouseEvent, clip: Clip, type: DragState['type']) => {
     e.stopPropagation();
-    if (selectedTool !== 'select') return;
-
-    if (!e.shiftKey && !selectedClipIds.includes(clip.id)) selectClips([clip.id]);
-    else if (e.shiftKey) {
-      selectClips(selectedClipIds.includes(clip.id)
-        ? selectedClipIds.filter(id => id !== clip.id)
-        : [...selectedClipIds, clip.id]);
-    }
-
+    if (tracks.find(t => t.id === clip.trackId)?.locked) return;
+    selectClips([clip.id]);
     dragRef.current = {
-      type: action,
+      type,
       clipId: clip.id,
       startX: e.clientX,
       startTime: clip.startTime,
       startDuration: clip.duration,
       startTrimStart: clip.trimStart || 0,
     };
-
     const onMove = (ev: MouseEvent) => {
       const drag = dragRef.current;
       if (!drag) return;
       const dx = ev.clientX - drag.startX;
-      const dt = xToTime(dx);
-
+      const dt = dx / zoom;
       if (drag.type === 'move') {
         const newStart = snapTime(Math.max(0, drag.startTime + dt), drag.clipId);
-        const delta = newStart - drag.startTime;
         updateClip(drag.clipId, { startTime: newStart });
-        selectedClipIds.filter(id => id !== drag.clipId).forEach(id => {
-          const oc = clips.find(c => c.id === id);
-          if (oc) updateClip(id, { startTime: Math.max(0, oc.startTime + delta) });
-        });
       } else if (drag.type === 'trim-left') {
-        const maxTrim = drag.startTime + drag.startDuration - 0.1;
-        const newStart = snapTime(Math.max(0, Math.min(maxTrim, drag.startTime + dt)));
-        const delta = newStart - drag.startTime;
+        const newStart = Math.max(0, drag.startTime + dt);
+        const maxStart = drag.startTime + drag.startDuration - 0.1;
+        const clamped = Math.min(newStart, maxStart);
+        const delta = clamped - drag.startTime;
         updateClip(drag.clipId, {
-          startTime: newStart,
-          duration: Math.max(0.1, drag.startDuration - delta),
-          trimStart: Math.max(0, drag.startTrimStart + delta),
+          startTime: clamped,
+          duration: drag.startDuration - delta,
+          trimStart: drag.startTrimStart + delta,
         });
       } else if (drag.type === 'trim-right') {
-        const rawEnd = drag.startTime + drag.startDuration + dt;
-        const snappedEnd = snapTime(rawEnd, drag.clipId);
-        const newDur = snappedEnd - drag.startTime;
-        const maxDur = clip.originalDuration ? clip.originalDuration - (clip.trimStart || 0) : 9999;
-        updateClip(drag.clipId, { duration: Math.min(maxDur, Math.max(0.1, newDur)) });
+        const newDur = Math.max(0.1, drag.startDuration + dt);
+        updateClip(drag.clipId, { duration: newDur });
       }
     };
-
-    const onUp = () => { dragRef.current = null; window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+    const onUp = () => {
+      dragRef.current = null;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
   };
 
   const handleTrackAreaMouseDown = (e: React.MouseEvent) => {
     if (selectedTool === 'razor') return;
-    if (e.target !== e.currentTarget) return;
     selectClips([]);
   };
 
   const handleTrackDrop = (e: React.DragEvent, trackId: string) => {
     e.preventDefault();
     const assetId = e.dataTransfer.getData('assetId');
-    if (!assetId) return;
     const asset = mediaAssets.find(a => a.id === assetId);
     if (!asset) return;
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const x = e.clientX - rect.left + scrollLeft;
     const startTime = snapTime(Math.max(0, xToTime(x)));
-
-    addClip({
+    const newClip: Clip = {
       id: crypto.randomUUID(),
       name: asset.name,
       type: asset.type,
@@ -205,37 +213,32 @@ export const Timeline: React.FC = () => {
       volume: 1,
       opacity: 1,
       speed: 1,
-      originalDuration: asset.duration || 5,
-      filters: { brightness: 100, contrast: 100, saturation: 100, hue: 0, blur: 0, sepia: 0, grayscale: 0 },
-      transition: 'none',
-    });
+      trimStart: 0,
+      originalDuration: asset.duration,
+    };
+    addClip(newClip);
   };
 
-  const rulerTicks = () => {
+  const rulerTicks = useMemo(() => {
     const ticks: { t: number; x: number; major: boolean }[] = [];
     const interval = zoom >= 200 ? 0.5 : zoom >= 80 ? 1 : zoom >= 30 ? 5 : zoom >= 10 ? 10 : 30;
-    for (let t = 0; t <= duration + interval; t += interval) {
+    const maxTicks = 400;
+    let count = 0;
+    for (let t = 0; t <= duration + interval && count < maxTicks; t += interval) {
       const x = timeToX(t);
       ticks.push({ t, x, major: true });
+      count++;
       if (interval >= 1 && zoom >= 60) {
-        for (let sub = 1; sub < 5; sub++) {
+        for (let sub = 1; sub < 5 && count < maxTicks; sub++) {
           const st = t + sub * (interval / 5);
+          if (st > duration + interval) break;
           ticks.push({ t: st, x: timeToX(st), major: false });
+          count++;
         }
       }
     }
     return ticks;
-  };
-
-  const addVideoTrack = () => {
-    const vCount = tracks.filter(t => t.type === 'video').length + 1;
-    addTrack({ id: crypto.randomUUID(), name: `Video ${vCount}`, type: 'video', locked: false, muted: false, solo: false, height: 64, color: '#c0392b' });
-  };
-
-  const addAudioTrack = () => {
-    const aCount = tracks.filter(t => t.type === 'audio').length + 1;
-    addTrack({ id: crypto.randomUUID(), name: `Audio ${aCount}`, type: 'audio', locked: false, muted: false, solo: false, height: 48, color: '#27ae60' });
-  };
+  }, [zoom, duration]);
 
   const totalTimelineWidth = Math.max(timeToX(duration) + 300, 1200);
 
@@ -263,40 +266,36 @@ export const Timeline: React.FC = () => {
           setContextMenu({ x: e.clientX, y: e.clientY, clipId: clip.id });
         }}
         onClick={e => {
-          if (selectedTool === 'razor') return;
-          e.stopPropagation();
-          if (e.shiftKey) {
-            selectClips(selectedClipIds.includes(clip.id)
-              ? selectedClipIds.filter(id => id !== clip.id)
-              : [...selectedClipIds, clip.id]);
-          } else {
-            selectClips([clip.id]);
+          if (selectedTool === 'razor') {
+            e.stopPropagation();
+            const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const cutTime = clip.startTime + xToTime(x);
+            splitClip(clip.id, cutTime);
           }
         }}
       >
-        <div className="trim-handle left" onMouseDown={e => { e.stopPropagation(); handleClipMouseDown(e, clip, 'trim-left'); }} />
-        <div className="clip-content">
-          <span className="clip-label">{clip.name}</span>
-          {clip.type === 'audio' && width > 60 && (
-            <div className="waveform-placeholder">
-              {Array.from({ length: Math.floor(width / 4) }).map((_, i) => (
-                <div key={i} className="waveform-bar" style={{ height: `${20 + Math.sin(i * 0.8) * 15 + Math.random() * 10}%` }} />
-              ))}
-            </div>
-          )}
-          {clip.type === 'video' && width > 80 && clip.src && (
-            <div className="clip-filmstrip">
-              {Array.from({ length: Math.ceil(width / 40) }).map((_, i) => (
-                <div key={i} className="filmstrip-frame" style={{ width: 38 }}>
-                  <video src={clip.src} style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: 0.6 }} muted />
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-        <div className="trim-handle right" onMouseDown={e => { e.stopPropagation(); handleClipMouseDown(e, clip, 'trim-right'); }} />
+        <div className="clip-label">{clip.name}</div>
+        <div
+          className="clip-trim-handle left"
+          onMouseDown={e => { e.stopPropagation(); handleClipMouseDown(e, clip, 'trim-left'); }}
+        />
+        <div
+          className="clip-trim-handle right"
+          onMouseDown={e => { e.stopPropagation(); handleClipMouseDown(e, clip, 'trim-right'); }}
+        />
       </div>
     );
+  };
+
+  const addVideoTrack = () => {
+    const vCount = tracks.filter(t => t.type === 'video').length + 1;
+    addTrack({ id: crypto.randomUUID(), name: `Video ${vCount}`, type: 'video', locked: false, muted: false, solo: false, height: 64, color: '#c0392b' });
+  };
+
+  const addAudioTrack = () => {
+    const aCount = tracks.filter(t => t.type === 'audio').length + 1;
+    addTrack({ id: crypto.randomUUID(), name: `Audio ${aCount}`, type: 'audio', locked: false, muted: false, solo: false, height: 48, color: '#27ae60' });
   };
 
   return (
@@ -316,7 +315,7 @@ export const Timeline: React.FC = () => {
             style={{ width: totalTimelineWidth, marginLeft: -scrollLeft }}
             onMouseDown={handleRulerMouseDown}
           >
-            {rulerTicks().map((tick, i) => (
+            {rulerTicks.map((tick, i) => (
               tick.major ? (
                 <div key={i} className="ruler-tick major" style={{ left: tick.x }}>
                   <span className="ruler-label">{formatRulerTime(tick.t)}</span>
@@ -328,7 +327,6 @@ export const Timeline: React.FC = () => {
             {markers.map(m => (
               <div key={m.id} className="ruler-marker" style={{ left: timeToX(m.time), background: m.color }} title={m.label} />
             ))}
-            <div className="ruler-playhead" style={{ left: timeToX(currentTime) }} />
           </div>
         </div>
       </div>
@@ -377,11 +375,7 @@ export const Timeline: React.FC = () => {
                 {clips.filter(c => c.trackId === track.id).map(clip => renderClip(clip))}
               </div>
             ))}
-
-            <div
-              className="timeline-playhead"
-              style={{ left: timeToX(currentTime), height: tracks.reduce((s, t) => s + t.height, 0) }}
-            />
+            <Playhead />
           </div>
         </div>
       </div>
