@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { Clip } from '../types';
+import { getClipProps } from '../utils/clipEval';
 
 const formatTime = (secs: number, fps: number = 30) => {
   const h = Math.floor(secs / 3600);
@@ -135,7 +136,9 @@ export const PreviewPanel: React.FC = () => {
     for (const clip of active) {
       const local = t - clip.startTime + (clip.trimStart || 0);
       const track = tracksRef.current.find(tr => tr.id === clip.trackId);
-      const vol = (clip.volume ?? 1) * volumeRef.current * (mutedRef.current || track?.muted || clip.muted ? 0 : 1);
+      const localTime = t - clip.startTime;
+const props = getClipProps(clip, localTime);
+const vol = props.volume * volumeRef.current * (mutedRef.current || track?.muted || clip.muted ? 0 : 1);
       const wantPlay = isPlaying && !track?.muted && !clip.muted;
 
       if (clip.type === 'video') {
@@ -173,81 +176,100 @@ export const PreviewPanel: React.FC = () => {
     }
   };
 
-  const draw = () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d', { alpha: false });
-    if (!ctx) return;
-    const t = timeRef.current;
-    const clips = clipsRef.current;
-    const tracks = tracksRef.current;
+const draw = () => {
+  const canvas = canvasRef.current;
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d', { alpha: false });
+  if (!ctx) return;
+  const t = timeRef.current;
+  const clips = clipsRef.current;
+  const tracks = tracksRef.current;
 
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    const visible = clips
-      .filter(c => t >= c.startTime && t < c.startTime + c.duration)
-      .sort((a, b) => {
-        const ai = tracks.findIndex(tr => tr.id === a.trackId);
-        const bi = tracks.findIndex(tr => tr.id === b.trackId);
-        return bi - ai;
-      });
+  const visible = clips
+    .filter(c => t >= c.startTime && t < c.startTime + c.duration)
+    .sort((a, b) => {
+      const ai = tracks.findIndex(tr => tr.id === a.trackId);
+      const bi = tracks.findIndex(tr => tr.id === b.trackId);
+      return bi - ai;
+    });
 
-    let drew = false;
+  let drew = false;
 
-    for (const clip of visible) {
-      const track = tracks.find(tr => tr.id === clip.trackId);
-      if (track?.muted && clip.type !== 'audio') continue;
+  for (const clip of visible) {
+    const track = tracks.find(tr => tr.id === clip.trackId);
+    if (track?.muted && clip.type !== 'audio') continue;
 
-      ctx.filter = buildFilterString(clip) || 'none';
-      ctx.globalAlpha = clip.opacity ?? 1;
+    const localTime = t - clip.startTime;
+    const props = getClipProps(clip, localTime);
 
-      if (clip.type === 'video') {
-        const v = videoMap.current.get(clip.id);
-        if (v && v.readyState >= 2) {
-          ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
-          drew = true;
-        }
-      } else if (clip.type === 'image' && clip.src) {
-        const img = document.getElementById(`img-asset-${clip.id}`) as HTMLImageElement | null;
-        if (img?.complete) {
-          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-          drew = true;
-        }
-      } else if (clip.type === 'text') {
-        ctx.filter = 'none';
-        const fs = (clip.fontSize || 64) * (canvas.width / resolution.width);
-        ctx.font = `bold ${fs}px ${clip.fontFamily || 'Inter'}, sans-serif`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        if (clip.textBgColor && clip.textBgColor !== 'transparent') {
-          const m = ctx.measureText(clip.textContent || '');
-          const pad = fs * 0.3;
-          ctx.fillStyle = clip.textBgColor;
-          ctx.fillRect(canvas.width / 2 - m.width / 2 - pad, canvas.height / 2 - fs / 2 - pad, m.width + pad * 2, fs + pad * 2);
-        }
-        ctx.fillStyle = clip.textColor || '#fff';
-        ctx.fillText(clip.textContent || '', canvas.width / 2, canvas.height / 2);
+    ctx.save();
+    ctx.filter = buildFilterString(clip) || 'none';
+    ctx.globalAlpha = props.opacity;
+
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2;
+    ctx.translate(cx + props.x, cy + props.y);
+    ctx.scale(props.scale, props.scale);
+    ctx.translate(-cx, -cy);
+
+    if (props.transitionType === 'wipe' && props.transitionProgress < 1) {
+      const w = canvas.width * props.transitionProgress;
+      ctx.beginPath();
+      ctx.rect(0, 0, w, canvas.height);
+      ctx.clip();
+    } else if (props.transitionType === 'slide' && props.transitionProgress < 1) {
+      const offset = canvas.width * (1 - props.transitionProgress);
+      ctx.translate(-offset, 0);
+    }
+
+    if (clip.type === 'video') {
+      const v = videoMap.current.get(clip.id);
+      if (v && v.readyState >= 2) {
+        ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
         drew = true;
       }
-
+    } else if (clip.type === 'image' && clip.src) {
+      const img = document.getElementById(`img-asset-${clip.id}`) as HTMLImageElement | null;
+      if (img?.complete) {
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        drew = true;
+      }
+    } else if (clip.type === 'text') {
       ctx.filter = 'none';
-      ctx.globalAlpha = 1;
-    }
-
-    if (!drew) {
-      ctx.fillStyle = '#111';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = '#2a2a2a';
-      ctx.font = '22px Inter, sans-serif';
+      const fs = (clip.fontSize || 64) * (canvas.width / resolution.width);
+      ctx.font = `bold ${fs}px ${clip.fontFamily || 'Inter'}, sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText('V0idpause PRO', canvas.width / 2, canvas.height / 2 - 14);
-      ctx.font = '13px Inter, sans-serif';
-      ctx.fillStyle = '#333';
-      ctx.fillText('Import media and drag to the timeline', canvas.width / 2, canvas.height / 2 + 14);
+      if (clip.textBgColor && clip.textBgColor !== 'transparent') {
+        const m = ctx.measureText(clip.textContent || '');
+        const pad = fs * 0.3;
+        ctx.fillStyle = clip.textBgColor;
+        ctx.fillRect(canvas.width / 2 - m.width / 2 - pad, canvas.height / 2 - fs / 2 - pad, m.width + pad * 2, fs + pad * 2);
+      }
+      ctx.fillStyle = clip.textColor || '#fff';
+      ctx.fillText(clip.textContent || '', canvas.width / 2, canvas.height / 2);
+      drew = true;
     }
-  };
+
+    ctx.restore();
+  }
+
+  if (!drew) {
+    ctx.fillStyle = '#111';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#2a2a2a';
+    ctx.font = '22px Inter, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('V0idpause PRO', canvas.width / 2, canvas.height / 2 - 14);
+    ctx.font = '13px Inter, sans-serif';
+    ctx.fillStyle = '#333';
+    ctx.fillText('Import media and drag to the timeline', canvas.width / 2, canvas.height / 2 + 14);
+  }
+};
 
 useEffect(() => {
   let lastTs = 0;
