@@ -8,9 +8,7 @@ import { viteSingleFile } from "vite-plugin-singlefile";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// https://vite.dev/config/
 export default defineConfig({
-  base: '/V0idPause-PRO/',
   plugins: [react(), tailwindcss(), viteSingleFile()],
   resolve: {
     alias: {
