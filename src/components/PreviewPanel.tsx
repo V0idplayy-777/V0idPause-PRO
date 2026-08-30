@@ -37,158 +37,176 @@ export const PreviewPanel: React.FC = () => {
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
-  const currentTimeRef = useRef(currentTime);
-  const playingRef = useRef(playing);
+  const timeRef = useRef(0);
+  const playingRef = useRef(false);
   const clipsRef = useRef(clips);
   const tracksRef = useRef(tracks);
   const durationRef = useRef(duration);
-  const playbackVolumeRef = useRef(playbackVolume);
+  const volumeRef = useRef(playbackVolume);
   const mutedRef = useRef(false);
-  const videoRefs = useRef<Map<string, HTMLVideoElement>>(new Map());
-  const audioRefs = useRef<Map<string, HTMLAudioElement>>(new Map());
-  const lastSeekRef = useRef<Map<string, number>>(new Map());
+  const videoMap = useRef(new Map<string, HTMLVideoElement>());
+  const audioMap = useRef(new Map<string, HTMLAudioElement>());
+  const lastUiPush = useRef(0);
+  const lastSync = useRef(0);
   const [muted, setMuted] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => { currentTimeRef.current = currentTime; }, [currentTime]);
-  useEffect(() => { playingRef.current = playing; }, [playing]);
   useEffect(() => { clipsRef.current = clips; }, [clips]);
   useEffect(() => { tracksRef.current = tracks; }, [tracks]);
   useEffect(() => { durationRef.current = duration; }, [duration]);
-  useEffect(() => { playbackVolumeRef.current = playbackVolume; }, [playbackVolume]);
+  useEffect(() => { volumeRef.current = playbackVolume; }, [playbackVolume]);
   useEffect(() => { mutedRef.current = muted; }, [muted]);
 
   useEffect(() => {
-    const activeIds = new Set(
+    if (!playingRef.current) {
+      timeRef.current = currentTime;
+    }
+  }, [currentTime]);
+
+  useEffect(() => {
+    playingRef.current = playing;
+    if (playing) {
+      lastUiPush.current = 0;
+      lastSync.current = 0;
+    }
+  }, [playing]);
+
+  useEffect(() => {
+    const liveIds = new Set(
       clips.filter(c => c.src && (c.type === 'video' || c.type === 'audio')).map(c => c.id)
     );
-    videoRefs.current.forEach((vid, id) => {
-      if (!activeIds.has(id)) {
-        vid.pause();
-        vid.removeAttribute('src');
-        vid.load();
-        videoRefs.current.delete(id);
-        lastSeekRef.current.delete(id);
+    for (const [id, el] of videoMap.current) {
+      if (!liveIds.has(id)) {
+        el.pause();
+        el.removeAttribute('src');
+        el.load();
+        videoMap.current.delete(id);
       }
-    });
-    audioRefs.current.forEach((aud, id) => {
-      if (!activeIds.has(id)) {
-        aud.pause();
-        aud.removeAttribute('src');
-        aud.load();
-        audioRefs.current.delete(id);
-        lastSeekRef.current.delete(id);
+    }
+    for (const [id, el] of audioMap.current) {
+      if (!liveIds.has(id)) {
+        el.pause();
+        el.removeAttribute('src');
+        el.load();
+        audioMap.current.delete(id);
       }
-    });
+    }
   }, [clips]);
 
-  const syncMedia = useCallback((t: number, isPlaying: boolean) => {
-    const activeClips = clipsRef.current.filter(c =>
+  const getOrCreateVideo = (clip: Clip) => {
+    let v = videoMap.current.get(clip.id);
+    if (!v) {
+      v = document.createElement('video');
+      v.src = clip.src!;
+      v.preload = 'auto';
+      v.crossOrigin = 'anonymous';
+      v.playsInline = true;
+      v.muted = false;
+      videoMap.current.set(clip.id, v);
+    }
+    return v;
+  };
+
+  const getOrCreateAudio = (clip: Clip) => {
+    let a = audioMap.current.get(clip.id);
+    if (!a) {
+      a = document.createElement('audio');
+      a.src = clip.src!;
+      a.preload = 'auto';
+      audioMap.current.set(clip.id, a);
+    }
+    return a;
+  };
+
+  const syncMedia = (t: number, isPlaying: boolean) => {
+    const active = clipsRef.current.filter(c =>
       c.src && (c.type === 'video' || c.type === 'audio') &&
       t >= c.startTime && t < c.startTime + c.duration
     );
+    const activeIds = new Set(active.map(c => c.id));
 
-    const activeIds = new Set(activeClips.map(c => c.id));
-
-    activeClips.forEach(clip => {
-      const clipTime = t - clip.startTime + (clip.trimStart || 0);
+    for (const clip of active) {
+      const localTime = t - clip.startTime + (clip.trimStart || 0);
       const track = tracksRef.current.find(tr => tr.id === clip.trackId);
-      const vol = (clip.volume ?? 1) * playbackVolumeRef.current * (mutedRef.current ? 0 : 1) * (track?.muted ? 0 : 1);
-      const shouldPlay = isPlaying && !track?.muted && !clip.muted;
+      const vol = (clip.volume ?? 1) * volumeRef.current * (mutedRef.current || track?.muted || clip.muted ? 0 : 1);
+      const wantPlay = isPlaying && !track?.muted && !clip.muted;
 
       if (clip.type === 'video') {
-        let vid = videoRefs.current.get(clip.id);
-        if (!vid) {
-          vid = document.createElement('video');
-          vid.src = clip.src!;
-          vid.preload = 'auto';
-          vid.crossOrigin = 'anonymous';
-          vid.playsInline = true;
-          videoRefs.current.set(clip.id, vid);
+        const v = getOrCreateVideo(clip);
+        v.volume = Math.min(1, Math.max(0, vol));
+        v.playbackRate = clip.speed || 1;
+        if (Math.abs(v.currentTime - localTime) > 0.3) {
+          try { v.currentTime = localTime; } catch {}
         }
-        vid.volume = Math.min(1, Math.max(0, vol));
-        vid.playbackRate = clip.speed || 1;
-        const lastSeek = lastSeekRef.current.get(clip.id) ?? -999;
-        if (Math.abs(vid.currentTime - clipTime) > 0.25 || Math.abs(lastSeek - clipTime) > 0.25) {
-          if (Math.abs(vid.currentTime - clipTime) > 0.08) {
-            vid.currentTime = clipTime;
-            lastSeekRef.current.set(clip.id, clipTime);
-          }
-        }
-        if (shouldPlay) {
-          if (vid.paused) vid.play().catch(() => {});
-        } else {
-          if (!vid.paused) vid.pause();
+        if (wantPlay) {
+          if (v.paused) v.play().catch(() => {});
+        } else if (!v.paused) {
+          v.pause();
         }
       } else {
-        let aud = audioRefs.current.get(clip.id);
-        if (!aud) {
-          aud = document.createElement('audio');
-          aud.src = clip.src!;
-          aud.preload = 'auto';
-          audioRefs.current.set(clip.id, aud);
+        const a = getOrCreateAudio(clip);
+        a.volume = Math.min(1, Math.max(0, vol));
+        a.playbackRate = clip.speed || 1;
+        if (Math.abs(a.currentTime - localTime) > 0.3) {
+          try { a.currentTime = localTime; } catch {}
         }
-        aud.volume = Math.min(1, Math.max(0, vol));
-        aud.playbackRate = clip.speed || 1;
-        const lastSeek = lastSeekRef.current.get(clip.id) ?? -999;
-        if (Math.abs(aud.currentTime - clipTime) > 0.25 || Math.abs(lastSeek - clipTime) > 0.25) {
-          if (Math.abs(aud.currentTime - clipTime) > 0.08) {
-            aud.currentTime = clipTime;
-            lastSeekRef.current.set(clip.id, clipTime);
-          }
-        }
-        if (shouldPlay) {
-          if (aud.paused) aud.play().catch(() => {});
-        } else {
-          if (!aud.paused) aud.pause();
+        if (wantPlay) {
+          if (a.paused) a.play().catch(() => {});
+        } else if (!a.paused) {
+          a.pause();
         }
       }
-    });
+    }
 
-    videoRefs.current.forEach((vid, id) => {
-      if (!activeIds.has(id) && !vid.paused) vid.pause();
-    });
-    audioRefs.current.forEach((aud, id) => {
-      if (!activeIds.has(id) && !aud.paused) aud.pause();
-    });
-  }, []);
+    for (const [id, v] of videoMap.current) {
+      if (!activeIds.has(id) && !v.paused) v.pause();
+    }
+    for (const [id, a] of audioMap.current) {
+      if (!activeIds.has(id) && !a.paused) a.pause();
+    }
+  };
 
-  const render = useCallback(() => {
+  const draw = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    const t = currentTimeRef.current;
+    const t = timeRef.current;
     const clips = clipsRef.current;
     const tracks = tracksRef.current;
 
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    const sortedClips = clips
+    const visible = clips
       .filter(c => t >= c.startTime && t < c.startTime + c.duration)
       .sort((a, b) => {
-        const aIdx = tracks.findIndex(tr => tr.id === a.trackId);
-        const bIdx = tracks.findIndex(tr => tr.id === b.trackId);
-        return bIdx - aIdx;
+        const ai = tracks.findIndex(tr => tr.id === a.trackId);
+        const bi = tracks.findIndex(tr => tr.id === b.trackId);
+        return bi - ai;
       });
 
-    for (const clip of sortedClips) {
+    let drewSomething = false;
+
+    for (const clip of visible) {
       const track = tracks.find(tr => tr.id === clip.trackId);
       if (track?.muted && clip.type !== 'audio') continue;
-      const filterStr = buildFilterString(clip);
-      ctx.filter = filterStr || 'none';
+
+      ctx.filter = buildFilterString(clip) || 'none';
       ctx.globalAlpha = clip.opacity ?? 1;
 
       if (clip.type === 'video') {
-        const vid = videoRefs.current.get(clip.id);
-        if (vid && vid.readyState >= 2) {
-          ctx.drawImage(vid, 0, 0, canvas.width, canvas.height);
+        const v = videoMap.current.get(clip.id);
+        if (v && v.readyState >= 2) {
+          ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+          drewSomething = true;
         }
       } else if (clip.type === 'image' && clip.src) {
-        const img = document.getElementById(`img-asset-${clip.id}`) as HTMLImageElement;
-        if (img?.complete) ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        const img = document.getElementById(`img-asset-${clip.id}`) as HTMLImageElement | null;
+        if (img && img.complete) {
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          drewSomething = true;
+        }
       } else if (clip.type === 'text') {
         ctx.filter = 'none';
         const fs = (clip.fontSize || 64) * (canvas.width / resolution.width);
@@ -199,70 +217,110 @@ export const PreviewPanel: React.FC = () => {
           const metrics = ctx.measureText(clip.textContent || '');
           const pad = fs * 0.3;
           ctx.fillStyle = clip.textBgColor;
-          ctx.fillRect(canvas.width / 2 - metrics.width / 2 - pad, canvas.height / 2 - fs / 2 - pad, metrics.width + pad * 2, fs + pad * 2);
+          ctx.fillRect(
+            canvas.width / 2 - metrics.width / 2 - pad,
+            canvas.height / 2 - fs / 2 - pad,
+            metrics.width + pad * 2,
+            fs + pad * 2
+          );
         }
         ctx.fillStyle = clip.textColor || '#fff';
         ctx.fillText(clip.textContent || '', canvas.width / 2, canvas.height / 2);
+        drewSomething = true;
       }
+
       ctx.filter = 'none';
       ctx.globalAlpha = 1;
     }
 
-    if (sortedClips.filter(c => c.type !== 'audio').length === 0) {
+    if (!drewSomething) {
       ctx.fillStyle = '#111';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.fillStyle = '#2a2a2a';
-      ctx.font = '28px Inter, sans-serif';
+      ctx.font = '24px Inter, sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText('V0idpause PRO', canvas.width / 2, canvas.height / 2 - 20);
-      ctx.font = '16px Inter, sans-serif';
-      ctx.fillStyle = '#222';
-      ctx.fillText('Import media and drag to the timeline', canvas.width / 2, canvas.height / 2 + 20);
+      ctx.fillText('V0idpause PRO', canvas.width / 2, canvas.height / 2 - 16);
+      ctx.font = '14px Inter, sans-serif';
+      ctx.fillStyle = '#333';
+      ctx.fillText('Import media and drag to the timeline', canvas.width / 2, canvas.height / 2 + 16);
     }
-  }, [resolution]);
+  };
 
   useEffect(() => {
     let lastTs = 0;
-    let lastSync = 0;
-    const loop = (ts: number) => {
+
+    const tick = (ts: number) => {
       if (playingRef.current) {
         const dt = lastTs ? (ts - lastTs) / 1000 : 0;
         lastTs = ts;
-        const next = currentTimeRef.current + dt;
-        if (next >= durationRef.current) {
+        timeRef.current += dt;
+
+        if (timeRef.current >= durationRef.current) {
+          timeRef.current = durationRef.current;
+          playingRef.current = false;
           setPlaying(false);
           setCurrentTime(durationRef.current);
-          currentTimeRef.current = durationRef.current;
-        } else {
-          currentTimeRef.current = next;
-          setCurrentTime(next);
+        } else if (ts - lastUiPush.current > 80) {
+          lastUiPush.current = ts;
+          setCurrentTime(timeRef.current);
         }
       } else {
         lastTs = 0;
       }
 
-      if (ts - lastSync > 40) {
-        syncMedia(currentTimeRef.current, playingRef.current);
-        lastSync = ts;
+      if (ts - lastSync.current > 50) {
+        lastSync.current = ts;
+        syncMedia(timeRef.current, playingRef.current);
       }
 
-      render();
-      animRef.current = requestAnimationFrame(loop);
+      draw();
+      animRef.current = requestAnimationFrame(tick);
     };
-    animRef.current = requestAnimationFrame(loop);
+
+    animRef.current = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(animRef.current);
-  }, [render, syncMedia, setPlaying, setCurrentTime]);
+  }, [setPlaying, setCurrentTime, resolution]);
 
   useEffect(() => {
-    syncMedia(currentTime, playing);
-  }, [currentTime, playing, clips, tracks, playbackVolume, muted, syncMedia]);
+    if (!playing) {
+      timeRef.current = currentTime;
+      syncMedia(currentTime, false);
+      draw();
+    }
+  }, [currentTime, playing, clips, tracks, playbackVolume, muted]);
 
-  const togglePlay = () => setPlaying(!playing);
-  const goToStart = () => { setCurrentTime(0); setPlaying(false); };
-  const goToEnd = () => { setCurrentTime(duration); setPlaying(false); };
-  const stepBack = () => setCurrentTime(Math.max(0, currentTime - 1 / fps));
-  const stepForward = () => setCurrentTime(Math.min(duration, currentTime + 1 / fps));
+  const togglePlay = () => {
+    if (!playing) {
+      timeRef.current = currentTime;
+      syncMedia(currentTime, true);
+    }
+    setPlaying(!playing);
+  };
+
+  const goToStart = () => {
+    setPlaying(false);
+    timeRef.current = 0;
+    setCurrentTime(0);
+  };
+
+  const goToEnd = () => {
+    setPlaying(false);
+    timeRef.current = duration;
+    setCurrentTime(duration);
+  };
+
+  const stepBack = () => {
+    const next = Math.max(0, currentTime - 1 / fps);
+    timeRef.current = next;
+    setCurrentTime(next);
+  };
+
+  const stepForward = () => {
+    const next = Math.min(duration, currentTime + 1 / fps);
+    timeRef.current = next;
+    setCurrentTime(next);
+  };
 
   const handleFullscreen = () => {
     if (!containerRef.current) return;
@@ -286,8 +344,8 @@ export const PreviewPanel: React.FC = () => {
       <div className="canvas-wrapper">
         <canvas
           ref={canvasRef}
-          width={1280}
-          height={720}
+          width={960}
+          height={540}
           className="preview-canvas"
           style={{ aspectRatio: '16/9' }}
         />
@@ -309,9 +367,15 @@ export const PreviewPanel: React.FC = () => {
             {muted ? <VolumeX size={14} /> : <Volume2 size={14} />}
           </button>
           <input
-            type="range" min={0} max={1} step={0.01}
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
             value={muted ? 0 : playbackVolume}
-            onChange={e => { setPlaybackVolume(Number(e.target.value)); setMuted(false); }}
+            onChange={e => {
+              setPlaybackVolume(Number(e.target.value));
+              setMuted(false);
+            }}
             className="vol-slider"
           />
         </div>
