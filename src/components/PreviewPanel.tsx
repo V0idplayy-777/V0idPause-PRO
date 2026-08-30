@@ -249,52 +249,64 @@ export const PreviewPanel: React.FC = () => {
     }
   };
 
-  useEffect(() => {
-    let lastTs = 0;
+useEffect(() => {
+  let lastTs = 0;
+  let lastUiPush = 0;
+  let lastSync = 0;
+  let lastDraw = 0;
+  let running = true;
 
-    const tick = (ts: number) => {
-      if (playingRef.current) {
-        const dt = lastTs ? (ts - lastTs) / 1000 : 0;
-        lastTs = ts;
-        timeRef.current += dt;
+  const tick = (ts: number) => {
+    if (!running) return;
 
-        if (timeRef.current >= durationRef.current) {
-          timeRef.current = durationRef.current;
-          playingRef.current = false;
-          setPlaying(false);
-          setCurrentTime(durationRef.current);
-        } else if (ts - lastUiPush.current > 200) {
-          lastUiPush.current = ts;
-          setCurrentTime(timeRef.current);
-        }
-      } else {
-        lastTs = 0;
+    if (playingRef.current) {
+      const dt = lastTs ? (ts - lastTs) / 1000 : 0;
+      lastTs = ts;
+      timeRef.current += dt;
+
+      if (timeRef.current >= durationRef.current) {
+        timeRef.current = durationRef.current;
+        playingRef.current = false;
+        setPlaying(false);
+        setCurrentTime(durationRef.current);
+      } else if (ts - lastUiPush > 200) {
+        lastUiPush = ts;
+        setCurrentTime(timeRef.current);
       }
 
-      if (ts - lastSync.current > 80) {
-        lastSync.current = ts;
-        syncMedia(timeRef.current, playingRef.current);
+      if (ts - lastSync > 80) {
+        lastSync = ts;
+        syncMedia(timeRef.current, true);
       }
 
-      if (ts - lastDraw.current > 33) {
-        lastDraw.current = ts;
+      if (ts - lastDraw > 33) {
+        lastDraw = ts;
         draw();
       }
 
       animRef.current = requestAnimationFrame(tick);
-    };
-
-    animRef.current = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(animRef.current);
-  }, [setPlaying, setCurrentTime, resolution]);
-
-  useEffect(() => {
-    if (!playing) {
-      timeRef.current = currentTime;
-      syncMedia(currentTime, false);
-      draw();
+    } else {
+      lastTs = 0;
     }
-  }, [currentTime, playing, clips, tracks, playbackVolume, muted]);
+  };
+
+  if (playing) {
+    animRef.current = requestAnimationFrame(tick);
+  }
+
+  return () => {
+    running = false;
+    cancelAnimationFrame(animRef.current);
+  };
+}, [playing, setPlaying, setCurrentTime, resolution]);
+
+useEffect(() => {
+  if (!playing) {
+    timeRef.current = currentTime;
+    syncMedia(currentTime, false);
+    draw();
+  }
+}, [currentTime, playing, clips, tracks, playbackVolume, muted, resolution]);
 
   const togglePlay = () => {
     if (!playing) {
