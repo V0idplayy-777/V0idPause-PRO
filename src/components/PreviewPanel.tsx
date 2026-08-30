@@ -39,24 +39,62 @@ export const PreviewPanel: React.FC = () => {
   const animRef = useRef<number>(0);
   const currentTimeRef = useRef(currentTime);
   const playingRef = useRef(playing);
+  const clipsRef = useRef(clips);
+  const tracksRef = useRef(tracks);
+  const durationRef = useRef(duration);
+  const playbackVolumeRef = useRef(playbackVolume);
+  const mutedRef = useRef(false);
   const videoRefs = useRef<Map<string, HTMLVideoElement>>(new Map());
   const audioRefs = useRef<Map<string, HTMLAudioElement>>(new Map());
+  const lastSeekRef = useRef<Map<string, number>>(new Map());
   const [muted, setMuted] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { currentTimeRef.current = currentTime; }, [currentTime]);
   useEffect(() => { playingRef.current = playing; }, [playing]);
+  useEffect(() => { clipsRef.current = clips; }, [clips]);
+  useEffect(() => { tracksRef.current = tracks; }, [tracks]);
+  useEffect(() => { durationRef.current = duration; }, [duration]);
+  useEffect(() => { playbackVolumeRef.current = playbackVolume; }, [playbackVolume]);
+  useEffect(() => { mutedRef.current = muted; }, [muted]);
 
   useEffect(() => {
-    const activeClips = clips.filter(c =>
+    const activeIds = new Set(
+      clips.filter(c => c.src && (c.type === 'video' || c.type === 'audio')).map(c => c.id)
+    );
+    videoRefs.current.forEach((vid, id) => {
+      if (!activeIds.has(id)) {
+        vid.pause();
+        vid.removeAttribute('src');
+        vid.load();
+        videoRefs.current.delete(id);
+        lastSeekRef.current.delete(id);
+      }
+    });
+    audioRefs.current.forEach((aud, id) => {
+      if (!activeIds.has(id)) {
+        aud.pause();
+        aud.removeAttribute('src');
+        aud.load();
+        audioRefs.current.delete(id);
+        lastSeekRef.current.delete(id);
+      }
+    });
+  }, [clips]);
+
+  const syncMedia = useCallback((t: number, isPlaying: boolean) => {
+    const activeClips = clipsRef.current.filter(c =>
       c.src && (c.type === 'video' || c.type === 'audio') &&
-      currentTime >= c.startTime && currentTime < c.startTime + c.duration
+      t >= c.startTime && t < c.startTime + c.duration
     );
 
+    const activeIds = new Set(activeClips.map(c => c.id));
+
     activeClips.forEach(clip => {
-      const clipTime = currentTime - clip.startTime + (clip.trimStart || 0);
-      const track = tracks.find(t => t.id === clip.trackId);
-      const vol = (clip.volume || 1) * playbackVolume * (muted ? 0 : 1) * (track?.muted ? 0 : 1);
+      const clipTime = t - clip.startTime + (clip.trimStart || 0);
+      const track = tracksRef.current.find(tr => tr.id === clip.trackId);
+      const vol = (clip.volume ?? 1) * playbackVolumeRef.current * (mutedRef.current ? 0 : 1) * (track?.muted ? 0 : 1);
+      const shouldPlay = isPlaying && !track?.muted && !clip.muted;
 
       if (clip.type === 'video') {
         let vid = videoRefs.current.get(clip.id);
@@ -65,14 +103,24 @@ export const PreviewPanel: React.FC = () => {
           vid.src = clip.src!;
           vid.preload = 'auto';
           vid.crossOrigin = 'anonymous';
+          vid.playsInline = true;
           videoRefs.current.set(clip.id, vid);
         }
-        vid.volume = Math.min(1, vol);
+        vid.volume = Math.min(1, Math.max(0, vol));
         vid.playbackRate = clip.speed || 1;
-        if (Math.abs(vid.currentTime - clipTime) > 0.2) vid.currentTime = clipTime;
-        if (playing && !track?.muted && !clip.muted) vid.play().catch(() => {});
-        else vid.pause();
-      } else if (clip.type === 'audio') {
+        const lastSeek = lastSeekRef.current.get(clip.id) ?? -999;
+        if (Math.abs(vid.currentTime - clipTime) > 0.25 || Math.abs(lastSeek - clipTime) > 0.25) {
+          if (Math.abs(vid.currentTime - clipTime) > 0.08) {
+            vid.currentTime = clipTime;
+            lastSeekRef.current.set(clip.id, clipTime);
+          }
+        }
+        if (shouldPlay) {
+          if (vid.paused) vid.play().catch(() => {});
+        } else {
+          if (!vid.paused) vid.pause();
+        }
+      } else {
         let aud = audioRefs.current.get(clip.id);
         if (!aud) {
           aud = document.createElement('audio');
@@ -80,23 +128,30 @@ export const PreviewPanel: React.FC = () => {
           aud.preload = 'auto';
           audioRefs.current.set(clip.id, aud);
         }
-        aud.volume = Math.min(1, vol);
+        aud.volume = Math.min(1, Math.max(0, vol));
         aud.playbackRate = clip.speed || 1;
-        if (Math.abs(aud.currentTime - clipTime) > 0.2) aud.currentTime = clipTime;
-        if (playing && !track?.muted && !clip.muted) aud.play().catch(() => {});
-        else aud.pause();
+        const lastSeek = lastSeekRef.current.get(clip.id) ?? -999;
+        if (Math.abs(aud.currentTime - clipTime) > 0.25 || Math.abs(lastSeek - clipTime) > 0.25) {
+          if (Math.abs(aud.currentTime - clipTime) > 0.08) {
+            aud.currentTime = clipTime;
+            lastSeekRef.current.set(clip.id, clipTime);
+          }
+        }
+        if (shouldPlay) {
+          if (aud.paused) aud.play().catch(() => {});
+        } else {
+          if (!aud.paused) aud.pause();
+        }
       }
     });
 
     videoRefs.current.forEach((vid, id) => {
-      const clip = clips.find(c => c.id === id);
-      if (!clip || currentTime < clip.startTime || currentTime >= clip.startTime + clip.duration) vid.pause();
+      if (!activeIds.has(id) && !vid.paused) vid.pause();
     });
     audioRefs.current.forEach((aud, id) => {
-      const clip = clips.find(c => c.id === id);
-      if (!clip || currentTime < clip.startTime || currentTime >= clip.startTime + clip.duration) aud.pause();
+      if (!activeIds.has(id) && !aud.paused) aud.pause();
     });
-  }, [currentTime, playing, clips, tracks, playbackVolume, muted]);
+  }, []);
 
   const render = useCallback(() => {
     const canvas = canvasRef.current;
@@ -104,6 +159,8 @@ export const PreviewPanel: React.FC = () => {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     const t = currentTimeRef.current;
+    const clips = clipsRef.current;
+    const tracks = tracksRef.current;
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = '#000';
@@ -126,7 +183,9 @@ export const PreviewPanel: React.FC = () => {
 
       if (clip.type === 'video') {
         const vid = videoRefs.current.get(clip.id);
-        if (vid && vid.readyState >= 2) ctx.drawImage(vid, 0, 0, canvas.width, canvas.height);
+        if (vid && vid.readyState >= 2) {
+          ctx.drawImage(vid, 0, 0, canvas.width, canvas.height);
+        }
       } else if (clip.type === 'image' && clip.src) {
         const img = document.getElementById(`img-asset-${clip.id}`) as HTMLImageElement;
         if (img?.complete) ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
@@ -161,31 +220,43 @@ export const PreviewPanel: React.FC = () => {
       ctx.fillStyle = '#222';
       ctx.fillText('Import media and drag to the timeline', canvas.width / 2, canvas.height / 2 + 20);
     }
-  }, [clips, tracks, resolution]);
+  }, [resolution]);
 
   useEffect(() => {
     let lastTs = 0;
+    let lastSync = 0;
     const loop = (ts: number) => {
       if (playingRef.current) {
         const dt = lastTs ? (ts - lastTs) / 1000 : 0;
         lastTs = ts;
         const next = currentTimeRef.current + dt;
-        if (next >= duration) {
+        if (next >= durationRef.current) {
           setPlaying(false);
-          setCurrentTime(duration);
+          setCurrentTime(durationRef.current);
+          currentTimeRef.current = durationRef.current;
         } else {
-          setCurrentTime(next);
           currentTimeRef.current = next;
+          setCurrentTime(next);
         }
       } else {
         lastTs = 0;
       }
+
+      if (ts - lastSync > 40) {
+        syncMedia(currentTimeRef.current, playingRef.current);
+        lastSync = ts;
+      }
+
       render();
       animRef.current = requestAnimationFrame(loop);
     };
     animRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(animRef.current);
-  }, [render, duration, setPlaying, setCurrentTime]);
+  }, [render, syncMedia, setPlaying, setCurrentTime]);
+
+  useEffect(() => {
+    syncMedia(currentTime, playing);
+  }, [currentTime, playing, clips, tracks, playbackVolume, muted, syncMedia]);
 
   const togglePlay = () => setPlaying(!playing);
   const goToStart = () => { setCurrentTime(0); setPlaying(false); };
@@ -215,8 +286,8 @@ export const PreviewPanel: React.FC = () => {
       <div className="canvas-wrapper">
         <canvas
           ref={canvasRef}
-          width={1920}
-          height={1080}
+          width={1280}
+          height={720}
           className="preview-canvas"
           style={{ aspectRatio: '16/9' }}
         />
